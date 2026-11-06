@@ -1,0 +1,10 @@
+{
+  "name": "Memory Co-op",
+  "short_name": "Memory Co-op",
+  "description": "A cooperative memory game for 1–4 players.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#141a33",
+  "theme_color": "#141a33",
+  "icons": [{ "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
