@@ -123,11 +123,14 @@ export class Board {
     const width = this.container.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
     const height = this.container.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
     const gap = Math.max(4, Math.min(14, Math.min(width, height) * 0.015));
-    const byWidth = (width - gap * (this.cols - 1)) / this.cols;
-    const byHeight = ((height - gap * (this.rows - 1)) / this.rows) * 0.75;
+    // Without CSS Grid every card has half the gap as margin all round, so the edges take a gap too.
+    const noGrid = document.documentElement.classList.contains('no-grid');
+    const gaps = (n: number) => gap * (noGrid ? n : n - 1);
+    const byWidth = (width - gaps(this.cols)) / this.cols;
+    const byHeight = ((height - gaps(this.rows)) / this.rows) * 0.75;
     const card = Math.max(20, Math.floor(Math.min(byWidth, byHeight)));
     this.el.style.setProperty('--card-w', `${card}px`);
     this.el.style.setProperty('--gap', `${gap}px`);
-    this.el.style.width = `${card * this.cols + gap * (this.cols - 1)}px`;
+    this.el.style.width = `${card * this.cols + gaps(this.cols)}px`;
   }
 }
