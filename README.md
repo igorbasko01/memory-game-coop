@@ -28,7 +28,8 @@ server/                 # One Cloudflare Worker + D1 (SQLite): serves webapp/dis
 ```
 
 - **No stored game state.** A game is replayed from its random seed and the list of rounds played, with the same engine the browser uses. The deck only ever exists on the server; clients get the values of face-up cards only.
-- **Polling, not sockets.** Phones poll the room about once a second, the TV a little faster. The picks of the current round live in their own table, where a card can only be picked once; when the last pick comes in the round is written once (`rounds` primary key `(game_id, n)`), so it can't be flipped twice.
+- **Polling, not sockets.** Phones poll the room about once a second, the TV a little faster. Each request is one database round trip for a poll or the TV, and two for a pick: all reads go in one D1 batch (dependent lookups are subqueries), and a pick is one write batch that also flips the round in SQL once all its picks are in. Batches are transactions, so the last two picks arriving together still flip the round once. Every response reports its round trips in an `x-db-trips` header.
+- **Instant picks.** A tapped card is marked on the phone at once; picks are sent in tap order in the background and the screen settles on the server's answer.
 - **Old browsers (TV browsers).** Smart-TV browsers run old Chromium (Samsung: ~56 on 2018 models, 63–85 on 2019–2022). The build ships a second, ES2015 bundle with polyfills for browsers without ES modules (`@vitejs/plugin-legacy`), lowers the modern bundle to Chrome 64, and the CSS has fallbacks for newer features (`dvh`, `color-mix`, `aspect-ratio`, `gap` on flex layouts).
 - **Players** are per device: a nickname and a secret token (stored hashed) kept in the browser.
 

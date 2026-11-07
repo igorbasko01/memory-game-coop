@@ -2,6 +2,7 @@ import { GRID_MAX, GRID_MIN, GRID_PRESETS, gridProblem, layoutOf } from '../engi
 import { api, ApiError, linkWith, loadIdentity, saveIdentity, type Identity } from '../online/client';
 import type { GameView, RoomView } from '../online/types';
 import { Board, MISS_SHOW_MS, missShowing } from './board';
+import { withPick } from './pick';
 import {
   esc,
   gridSummary,
@@ -29,7 +30,12 @@ export class PhoneApp {
   private board: Board | null = null;
   /** Server clock minus this device's clock. */
   private clockOffset = 0;
-  private picking = false;
+  /** Picks sent and not answered yet: the screen already shows them, so polls wait. */
+  private pending = 0;
+  /** Picks go to the server one after another, in tap order. */
+  private queue: Promise<unknown> = Promise.resolve();
+  /** Bumped on every tap, so a poll that started before it can't undo it. */
+  private taps = 0;
   private layoutKey = '';
   private panelKey = '';
   /** The round this device last showed, to notice when a new one starts. */
@@ -205,10 +211,11 @@ export class PhoneApp {
   private async poll(generation: number) {
     while (generation === this.generation) {
       await sleep(POLL_MS);
-      if (generation !== this.generation || !this.room || this.picking) continue;
+      if (generation !== this.generation || !this.room || this.pending) continue;
+      const taps = this.taps;
       try {
         const room = await api.room(this.token, this.room.id);
-        if (generation === this.generation && !this.picking) this.apply(room);
+        if (generation === this.generation && !this.pending && taps === this.taps) this.apply(room);
       } catch (e) {
         if (e instanceof ApiError && (e.status === 403 || e.status === 404)) {
           this.toast('You are no longer in that room');
@@ -451,7 +458,7 @@ export class PhoneApp {
     const gone = waiting.filter((m) => m.left);
     // Players who left can be picked for at once; anyone else after a while.
     const cover = playing && !needToPick && (gone.length > 0 || (waiting.length > 0 && serverNow >= game.coverAt));
-    const canPick = playing && !this.picking && !showingMiss;
+    const canPick = playing && !showingMiss;
     if (game.round !== this.shownRound) {
       if (this.shownRound >= 0 && game.last) navigator.vibrate?.(game.last.result === 'set' ? [40, 40, 80] : 150);
       this.shownRound = game.round;
@@ -489,23 +496,32 @@ export class PhoneApp {
     if (next.length) this.unlockTimer = window.setTimeout(() => this.room && this.apply(this.room), Math.min(...next) - serverNow + 30);
   }
 
-  private async pick(cell: number) {
+  /**
+   * Marks the card at once and sends the pick in the background. Picks are sent in
+   * tap order; once none are left waiting, the screen shows the server's answer.
+   */
+  private pick(cell: number) {
     const room = this.room;
-    const game = room?.game;
-    if (!room || !game || this.picking) return;
-    this.picking = true;
-    try {
-      const next = await api.pick(this.token, room.id, game.round, cell);
-      this.picking = false;
-      this.apply(next);
-    } catch (e) {
-      this.picking = false;
-      this.fail(e);
+    if (!room?.game) return;
+    const next = withPick(room, cell, Date.now() + this.clockOffset);
+    if (!next) return;
+    const round = room.game.round;
+    const generation = this.generation;
+    this.taps++;
+    this.pending++;
+    this.room = next;
+    this.renderGame(next, next.game!);
+    this.queue = this.queue.then(async () => {
       try {
-        this.apply(await api.room(this.token, room.id));
-      } catch {
-        this.renderGame(room, game);
+        const answer = await api.pick(this.token, room.id, round, cell);
+        if (--this.pending === 0 && generation === this.generation) this.apply(answer);
+      } catch (e) {
+        this.pending--;
+        if (generation !== this.generation) return;
+        this.fail(e);
+        // Undo what the screen guessed: show the room as the server has it.
+        if (!this.pending) await api.room(this.token, room.id).then((r) => generation === this.generation && this.apply(r), () => undefined);
       }
-    }
+    });
   }
 }

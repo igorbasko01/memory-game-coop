@@ -60,10 +60,28 @@ const main = async () => {
   room = await pickFor(a.token, 0, 1);
   assert(room.game!.picks.length === 0, 'picking your card again takes it back');
 
+  // Each database round trip costs latency: a poll and the TV take one, a pick two.
+  const trips = async (path: string, token?: string, data?: unknown) => {
+    const res = await fetch(base + path, {
+      method: data === undefined ? 'GET' : 'POST',
+      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: data === undefined ? undefined : JSON.stringify(data),
+    });
+    return Number(res.headers.get('x-db-trips'));
+  };
+  assert((await trips(`/api/rooms/${id}`, a.token)) === 1, 'a poll is one database round trip');
+  assert((await trips(`/api/tv/${created.code}`)) === 1, 'the TV view is one database round trip');
+  assert((await trips(`/api/rooms/${id}/pick`, a.token, { round: 0, cell: 0 })) === 2, 'a pick is two database round trips');
+
+  // The last two picks of a round arrive at the same moment: the round flips exactly once.
+  await Promise.all([pickFor(b.token, 0, 1), pickFor(c.token, 0, 2)]);
+  room = await call(`/api/rooms/${id}`, a.token);
+  assert(room.game!.round === 1 && room.game!.picks.length === 0, 'simultaneous last picks flip the round once');
+
   // Each round every player picks one card; they remember every card they have seen.
   const tokens = [a.token, b.token, c.token];
   const known = new Map<number, number>();
-  let misses = 0;
+  let misses = room.game!.misses;
   while (room.status === 'playing') {
     const g = room.game!;
     g.cells.forEach((x, i) => 'value' in x && known.set(i, x.value));
