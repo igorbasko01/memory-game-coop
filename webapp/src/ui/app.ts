@@ -243,6 +243,7 @@ export class PhoneApp {
               <div class="menu-items">
                 <button data-share>Invite players</button>
                 <button data-end hidden>End game</button>
+                <div class="menu-remove"></div>
                 <button data-leave class="danger">Leave room</button>
               </div>
             </details>
@@ -266,6 +267,7 @@ export class PhoneApp {
     this.root.querySelector<HTMLElement>('.tv-chip')!.hidden = !room.tv;
     const host = room.hostId === room.you;
     this.root.querySelector<HTMLElement>('[data-end]')!.hidden = !(host && room.status === 'playing');
+    this.renderRemoveMenu(room, host);
     if (room.status === 'playing' && room.game) this.renderGame(room, room.game);
     else this.renderLobby(room);
   }
@@ -285,8 +287,37 @@ export class PhoneApp {
     }
   }
 
+  /** The host's "Remove …" entries in the menu: everyone else still in the room. */
+  private renderRemoveMenu(room: RoomView, host: boolean) {
+    const others = host ? [...room.members, ...room.waiting].filter((m) => !m.left && m.id !== room.you) : [];
+    const box = this.root.querySelector<HTMLElement>('.menu-remove')!;
+    const key = others.map((m) => m.id + m.nickname).join();
+    if (box.dataset.key === key) return;
+    box.dataset.key = key;
+    box.innerHTML = others.map((m) => `<button class="danger" data-remove="${esc(m.id)}">Remove ${esc(m.nickname)}</button>`).join('');
+    for (const b of box.querySelectorAll<HTMLButtonElement>('[data-remove]'))
+      b.addEventListener('click', () => {
+        this.root.querySelector<HTMLDetailsElement>('.menu')!.removeAttribute('open');
+        const m = others.find((x) => x.id === b.dataset.remove);
+        if (m) this.removePlayer(m.id, m.nickname);
+      });
+  }
+
+  private async removePlayer(playerId: string, nickname: string) {
+    if (!this.room) return;
+    const playing = this.room.status === 'playing';
+    if (!confirm(`Remove ${nickname} from the room?${playing ? ' The rest of you will pick for them.' : ''}`)) return;
+    try {
+      this.apply(await api.remove(this.token, this.room.id, playerId));
+    } catch (e) {
+      this.fail(e);
+    }
+  }
+
   private async leave() {
     if (!this.room) return;
+    const inGame = this.room.status === 'playing' && this.mySeat >= 0;
+    if (inGame && !confirm('Leave the game? The others will pick for you. You can come back with the room code.')) return;
     try {
       await api.leave(this.token, this.room.id);
       this.home();
@@ -417,7 +448,9 @@ export class PhoneApp {
     const needToPick = playing && !!me && me.picked < game.picksPerPlayer;
     const showingMiss = missShowing(game, serverNow);
     const waiting = stillPicking(room, game).filter((m) => m.id !== room.you);
-    const cover = playing && !needToPick && waiting.length > 0 && serverNow >= game.coverAt;
+    const gone = waiting.filter((m) => m.left);
+    // Players who left can be picked for at once; anyone else after a while.
+    const cover = playing && !needToPick && (gone.length > 0 || (waiting.length > 0 && serverNow >= game.coverAt));
     const canPick = playing && !this.picking && !showingMiss;
     if (game.round !== this.shownRound) {
       if (this.shownRound >= 0 && game.last) navigator.vibrate?.(game.last.result === 'set' ? [40, 40, 80] : 150);
@@ -430,7 +463,9 @@ export class PhoneApp {
     const line = showingMiss
       ? 'Remember these cards!'
       : cover
-        ? `${waiting.map((m) => m.nickname).join(', ')} seem${waiting.length === 1 ? 's' : ''} away · tap a card to pick for them`
+        ? gone.length
+          ? `${gone.map((m) => m.nickname).join(', ')} left · tap a card to pick for them`
+          : `${waiting.map((m) => m.nickname).join(', ')} seem${waiting.length === 1 ? 's' : ''} away · tap a card to pick for them`
         : roundLine(room, game, room.you);
     banner.innerHTML = `
       <div class="turn-who"><b>Round ${game.round + 1}</b> · ${esc(line)}</div>

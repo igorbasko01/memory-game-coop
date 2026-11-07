@@ -70,6 +70,7 @@ export const api = {
   pick: (token: string, id: string, round: number, cell: number) => call<RoomView>(`/api/rooms/${id}/pick`, token, { round, cell }),
   end: (token: string, id: string) => call<RoomView>(`/api/rooms/${id}/end`, token, {}),
   leave: (token: string, id: string) => call<{ ok: true }>(`/api/rooms/${id}/leave`, token, {}),
+  remove: (token: string, id: string, playerId: string) => call<RoomView>(`/api/rooms/${id}/remove`, token, { playerId }),
   tv: (code: string) => call<RoomView>(`/api/tv/${code}`),
 };
 

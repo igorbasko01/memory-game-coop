@@ -370,6 +370,18 @@ input:focus {
   display: none;
 }
 
+.menu-remove {
+  display: flex;
+  flex-direction: column;
+}
+
+.menu-remove button {
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-weight: 700;
+}
+
 .room-body {
   flex: 1;
   min-height: 0;
