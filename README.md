@@ -47,8 +47,4 @@ Or run `VITE_API_URL=http://localhost:8787 npm run dev` in `webapp/` for hot rel
 
 ## Deploy
 
-`.github/workflows/deploy.yml` tests and builds the web app, type-checks the Worker on pull requests, and on `main` applies D1 migrations and deploys. Before the first deploy:
-
-1. Create the database: `cd server && npx wrangler d1 create memory-coop`, and put its id in `server/wrangler.toml` (`database_id`).
-2. Add the repo secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts Edit, D1 Edit, plus Workers Routes Edit for a custom domain) and `CLOUDFLARE_ACCOUNT_ID`.
-3. Optionally set a custom domain in `server/wrangler.toml` (`routes`); otherwise it is served on `memory-coop.<subdomain>.workers.dev`.
+The game is served at **https://memory.baskorp.com** by one Cloudflare Worker (`memory-coop`) with a D1 database (`memory-coop`), both set in `server/wrangler.toml`. `.github/workflows/deploy.yml` tests and builds the web app, type-checks the Worker on pull requests, and on `main` applies D1 migrations and deploys. It needs the repo secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts Edit, Workers Routes Edit, D1 Edit) and `CLOUDFLARE_ACCOUNT_ID`.

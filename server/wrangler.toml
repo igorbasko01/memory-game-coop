@@ -1,13 +1,12 @@
-# The game's Cloudflare Worker: serves the web app and the online server (/api/*).
+# The game's Cloudflare Worker: serves the web app and the online server (/api/*)
+# at https://memory.baskorp.com.
 # Deployed by .github/workflows/deploy.yml, which builds webapp/dist first.
 name = "memory-coop"
 main = "src/index.ts"
 compatibility_date = "2026-11-01"
 
-# To serve the game on your own domain, uncomment and set it (Cloudflare creates the DNS record and certificate).
-# Until then it is served at https://memory-coop.<your-subdomain>.workers.dev.
-# routes = [{ pattern = "memory.example.com", custom_domain = true }]
-workers_dev = true
+# The game's own address. Cloudflare creates the DNS record and certificate.
+routes = [{ pattern = "memory.baskorp.com", custom_domain = true }]
 
 # The built web app. Only /api/* runs the Worker; everything else is a static file.
 [assets]
@@ -18,8 +17,7 @@ run_worker_first = ["/api/*"]
 [[d1_databases]]
 binding = "DB"
 database_name = "memory-coop"
-# Create the database once with `npx wrangler d1 create memory-coop` and put its id here.
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "97a71fde-5387-48b8-a3ed-771683f9e6f3"
 migrations_dir = "migrations"
 
 [observability]
