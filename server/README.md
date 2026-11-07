@@ -16,7 +16,7 @@ All endpoints except creating a player and the TV view need `Authorization: Bear
 | `GET /api/rooms/:id` | The room; also marks the player as connected |
 | `POST /api/rooms/:id/settings` `{rows, cols}` | Host: changes the grid between games |
 | `POST /api/rooms/:id/start` | Host: starts a game with everyone in the room, in join order (also *play again*) |
-| `POST /api/rooms/:id/flip` `{n, cell}` | Flips a card. `n` is the number of flips so far; a stale `n` is ignored |
+| `POST /api/rooms/:id/pick` `{round, cell}` | Picks a card for the round (`round` = rounds played so far; a stale one is ignored). Picking your card again takes it back; another card moves your pick. The round flips when every pick is in |
 | `POST /api/rooms/:id/end` | Host: ends the game in progress |
 | `POST /api/rooms/:id/leave` | Leaves (not while your game is going, unless you're the host, which ends it). The host role passes on |
 | `GET /api/tv/:code` | The TV view of a room, no account needed. Marks a TV as connected |
@@ -24,8 +24,8 @@ All endpoints except creating a player and the TV view need `Authorization: Bear
 ## Rules the server enforces
 
 - The set size is the number of players when the game starts (at least 2), and the grid must hold at least two sets.
-- Only the player whose turn it is may flip, except that after 20 seconds without a flip anyone in the game may (covering for someone who left).
-- After a miss the next flip waits 0.9 s, so everyone sees the cards.
+- Every player picks one card per round (two when playing solo), and a card can only be picked by one player. The picked cards flip together once all picks are in.
+- Once a round has been open for 20 seconds, a player who has picked can pick for someone who hasn't (covering for someone who left).
 - Face-down values never leave the server: the board is dealt from a seed kept in the `games` table.
 
 ## Develop

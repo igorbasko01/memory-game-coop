@@ -1,21 +1,21 @@
 import { api, ApiError, linkWith } from '../online/client';
 import type { GameView, RoomView } from '../online/types';
-import { Board } from './board';
-import { attemptLine, esc, gridSummary, memberHtml, qrSvg, resultLine, seatColor, sleep, statsHtml, tickClocks, trayHtml, turnPlayer } from './parts';
+import { Board, missShowing } from './board';
+import { esc, gridSummary, lastRoundLine, memberHtml, qrSvg, resultLine, roundLine, seatColor, sleep, statsHtml, tickClocks, trayHtml } from './parts';
 
 const POLL_MS = 800;
 const CODE_KEY = 'memory-coop-tv-code';
 
 /**
  * The big screen: joins a room by its code, without being a player, and shows
- * the room's QR code, the board, whose turn it is and how the team is doing.
+ * the room's QR code, the board, who has picked this round and how the team is doing.
  */
 export class TvApp {
   private generation = 0;
   private board: Board | null = null;
   private layoutKey = '';
   private panelKey = '';
-  private lastFlips = -1;
+  private lastRound = -1;
   private clockOffset = 0;
   private tickTimer = 0;
 
@@ -40,7 +40,7 @@ export class TvApp {
     this.board = null;
     this.layoutKey = '';
     this.panelKey = '';
-    this.lastFlips = -1;
+    this.lastRound = -1;
     clearInterval(this.tickTimer);
   }
 
@@ -169,13 +169,13 @@ export class TvApp {
   }
 
   private renderGame(room: RoomView, game: GameView) {
-    this.board!.update(game);
-    if (game.flips !== this.lastFlips) {
-      if (this.lastFlips >= 0 && game.flips === this.lastFlips + 1 && game.last) this.flash(room, game);
-      this.lastFlips = game.flips;
+    this.board!.update(game, { initials: room.members.map((m) => m.nickname.slice(0, 1).toUpperCase()), clockOffset: this.clockOffset });
+    if (game.round !== this.lastRound) {
+      if (this.lastRound >= 0 && game.round === this.lastRound + 1 && game.last) this.flash(game);
+      this.lastRound = game.round;
     }
     const over = game.status !== 'playing';
-    const turn = turnPlayer(room, game);
+    const showingMiss = missShowing(game, Date.now() + this.clockOffset);
     const side = this.root.querySelector<HTMLElement>('.tv-side')!;
     side.innerHTML = `
       <header class="tv-title"><h1>Memory Co-op</h1><p>Room <b>${esc(room.code)}</b></p></header>
@@ -185,29 +185,27 @@ export class TvApp {
                <h2>${game.status === 'won' ? 'Board cleared!' : 'Game over'}</h2>
                <p>${esc(resultLine(game))}</p>
              </div>`
-          : `<div class="turn-card" style="--seat-color:${seatColor(game.turn)}">
-               <p class="turn-who"><b>${esc(turn.nickname)}</b>’s turn</p>
-               <p class="turn-what">${esc(attemptLine(game))}</p>
-               ${trayHtml(game, room.members.length)}
+          : `<div class="turn-card">
+               <p class="turn-who"><b>Round ${game.round + 1}</b></p>
+               <p class="turn-what">${esc(showingMiss ? 'Remember these cards!' : roundLine(room, game))}</p>
+               ${trayHtml(room, game)}
+               <p class="turn-last">${esc(lastRoundLine(game))}</p>
              </div>`
       }
       ${statsHtml(game, room.now)}
-      <ul class="members big">${room.members.map((m) => memberHtml(m, { turn: over ? null : game.turn, showSets: true })).join('')}</ul>
+      <ul class="members big">${room.members.map((m) => memberHtml(m, { picks: over ? null : game.picksPerPlayer })).join('')}</ul>
       ${over ? `<p class="tv-hint">The host can start the next game from their phone.</p>${room.members.length + room.waiting.length < 4 ? this.joinHtml(room, true) : ''}` : ''}`;
   }
 
-  /** A big, short message when a set closes or an attempt misses. */
-  private flash(room: RoomView, game: GameView) {
+  /** A big, short message when a round flips. */
+  private flash(game: GameView) {
     const last = game.last!;
-    if (last.result === 'open') return;
     const el = this.root.querySelector<HTMLElement>('.tv-flash');
     if (!el) return;
-    const value = (game.cells[last.cell] as { value?: number }).value;
+    const value = (game.cells[last.cells[0]] as { value?: number }).value;
     el.className = `tv-flash show ${last.result}`;
-    el.style.setProperty('--seat-color', seatColor(last.seat));
-    el.textContent =
-      last.result === 'set' ? (game.status === 'won' ? 'All sets found! 🎉' : `Set of ${value}s! ✨`) : `${room.members[last.seat]?.nickname ?? ''}: not a match`;
+    el.textContent = last.result === 'set' ? (game.status === 'won' ? 'All sets found! 🎉' : `Set of ${value}s! ✨`) : 'Not a match';
     clearTimeout(Number(el.dataset.timer));
-    el.dataset.timer = String(window.setTimeout(() => el.classList.remove('show'), 1500));
+    el.dataset.timer = String(window.setTimeout(() => el.classList.remove('show'), 1600));
   }
 }

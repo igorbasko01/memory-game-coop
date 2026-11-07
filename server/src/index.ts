@@ -1,4 +1,4 @@
-import { gridProblem, MAX_PLAYERS, replay, setSizeFor, type GameConfig } from '../../webapp/src/engine/game';
+import { gridProblem, MAX_PLAYERS, picksPerPlayer, replay, setSizeFor, type GameConfig } from '../../webapp/src/engine/game';
 import type { CellView, GameView, MemberView, RoomView } from '../../webapp/src/online/types';
 
 export interface Env {
@@ -9,10 +9,8 @@ export interface Env {
 const ROOM_TTL_MS = 12 * 60 * 60 * 1000;
 /** A player or TV that checked in this recently counts as connected. */
 const ONLINE_MS = 8000;
-/** After this long without a flip, anyone in the game may flip for the player whose turn it is. */
+/** After a round has been open this long, a player who has picked may also pick for someone who hasn't. */
 const COVER_MS = 20000;
-/** After a miss, the next flip waits this long so everyone can see the cards. */
-const MISS_PAUSE_MS = 900;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 
 interface PlayerRow {
@@ -155,33 +153,50 @@ const loadMembers = async (env: Env, roomId: string) =>
 
 const loadGame = (env: Env, id: string) => env.DB.prepare('SELECT * FROM games WHERE id = ?').bind(id).first<GameRow>();
 
-const loadFlips = async (env: Env, gameId: string) =>
-  (await env.DB.prepare('SELECT n, cell, created_at FROM flips WHERE game_id = ? ORDER BY n').bind(gameId).all<{ n: number; cell: number; created_at: number }>())
-    .results;
+interface PickRow {
+  seat: number;
+  slot: number;
+  cell: number;
+  actor: string;
+  created_at: number;
+}
 
-const configOf = (g: GameRow): GameConfig => ({
-  rows: g.rows,
-  cols: g.cols,
-  setSize: g.set_size,
-  players: (JSON.parse(g.seats) as string[]).length,
-  seed: g.seed,
-});
+const configOf = (g: GameRow): GameConfig => ({ rows: g.rows, cols: g.cols, setSize: g.set_size, seed: g.seed });
 
 const touch = (env: Env, roomId: string) => env.DB.prepare('UPDATE rooms SET updated_at = ? WHERE id = ?').bind(Date.now(), roomId).run();
 
+/** A game replayed from its rounds, with the picks of the round being chosen. */
+const loadPlay = async (env: Env, g: GameRow) => {
+  const { results: rounds } = await env.DB.prepare('SELECT n, cells, created_at FROM rounds WHERE game_id = ? ORDER BY n')
+    .bind(g.id)
+    .all<{ n: number; cells: string; created_at: number }>();
+  const game = replay(
+    configOf(g),
+    rounds.map((r) => JSON.parse(r.cells) as number[]),
+  );
+  const picks =
+    g.status === 'playing' && !game.state.over
+      ? (
+          await env.DB.prepare('SELECT seat, slot, cell, actor, created_at FROM picks WHERE game_id = ? AND round = ? ORDER BY seat, slot')
+            .bind(g.id, rounds.length)
+            .all<PickRow>()
+        ).results
+      : [];
+  const seats = JSON.parse(g.seats) as string[];
+  return { game, picks, seats, roundStartedAt: rounds.length ? rounds[rounds.length - 1].created_at : g.started_at };
+};
+
+type Play = Awaited<ReturnType<typeof loadPlay>>;
+
 /** The game as everyone may see it: values of face-down cards never leave the server. */
-const gameView = (g: GameRow, flips: { cell: number; created_at: number }[]): GameView => {
-  const game = replay(configOf(g), flips.map((f) => f.cell));
+const gameView = (g: GameRow, { game, picks, seats, roundStartedAt }: Play): GameView => {
   const s = game.state;
   const cells: CellView[] = game.deck.map((value, i) => {
     if (value === null) return { state: 'empty' };
-    const by = s.closedBy[i];
-    if (by !== null) return { state: 'closed', value, by };
-    if (s.open.includes(i)) return { state: 'open', value };
+    if (s.closed[i]) return { state: 'closed', value };
     if (s.lastMiss?.includes(i)) return { state: 'miss', value };
     return { state: 'down' };
   });
-  const lastFlipAt = flips.length ? flips[flips.length - 1].created_at : g.started_at;
   return {
     id: g.id,
     status: g.status,
@@ -189,20 +204,18 @@ const gameView = (g: GameRow, flips: { cell: number; created_at: number }[]): Ga
     cols: g.cols,
     setSize: g.set_size,
     sets: game.sets,
+    picksPerPlayer: picksPerPlayer(seats.length),
     cells,
-    open: s.open,
+    picks: picks.map((p) => ({ cell: p.cell, seat: p.seat })),
     lastMiss: s.lastMiss,
     last: s.last,
-    turn: s.turn,
-    flips: s.flips,
-    attempts: s.attempts,
+    round: s.rounds,
     misses: s.misses,
     setsClosed: s.setsClosed,
-    setsBySeat: s.setsBySeat,
     startedAt: g.started_at,
     finishedAt: g.finished_at,
-    lastFlipAt,
-    coverAt: lastFlipAt + COVER_MS,
+    roundStartedAt,
+    coverAt: roundStartedAt + COVER_MS,
   };
 };
 
@@ -210,20 +223,20 @@ const view = async (env: Env, r: RoomRow, you: string | null): Promise<RoomView>
   const now = Date.now();
   const members = await loadMembers(env, r.id);
   const g = r.game_id ? await loadGame(env, r.game_id) : null;
-  const game = g && r.status !== 'lobby' ? gameView(g, await loadFlips(env, g.id)) : null;
-  const member = (m: MemberRow, seat: number, sets = 0): MemberView => ({
+  const game = g && r.status !== 'lobby' ? gameView(g, await loadPlay(env, g)) : null;
+  const member = (m: MemberRow, seat: number, picked = 0): MemberView => ({
     id: m.player_id,
     nickname: m.nickname,
     seat,
     host: m.player_id === r.host_id,
     online: m.last_seen > now - ONLINE_MS,
     left: false,
-    sets,
+    picked,
   });
   let shown: MemberView[];
   let waiting: MemberView[] = [];
   if (g && game) {
-    // The game's players, in turn order, even if someone has left the room since.
+    // The game's players, in seat order, even if someone has left the room since.
     const seats = JSON.parse(g.seats) as string[];
     const left = seats.filter((id) => !members.some((m) => m.player_id === id));
     const gone = left.length
@@ -235,9 +248,9 @@ const view = async (env: Env, r: RoomRow, you: string | null): Promise<RoomView>
       : [];
     shown = seats.map((id, seat) => {
       const m = members.find((x) => x.player_id === id);
-      const sets = game.setsBySeat[seat] ?? 0;
-      if (m) return member(m, seat, sets);
-      return { id, nickname: gone.find((p) => p.id === id)?.nickname ?? 'Player', seat, host: false, online: false, left: true, sets };
+      const picked = game.picks.filter((p) => p.seat === seat).length;
+      if (m) return member(m, seat, picked);
+      return { id, nickname: gone.find((p) => p.id === id)?.nickname ?? 'Player', seat, host: false, online: false, left: true, picked };
     });
     waiting = members.filter((m) => !seats.includes(m.player_id)).map((m, i) => member(m, seats.length + i));
   } else {
@@ -362,34 +375,74 @@ const finishGame = async (env: Env, r: RoomRow, gameId: string, status: 'won' | 
   ]);
 };
 
-const flip = async (req: Request, me: PlayerRow, env: Env, id: string) => {
+const isUniqueViolation = (e: unknown) => e instanceof Error && /UNIQUE constraint/i.test(e.message);
+
+/**
+ * Picks a card for the round being chosen. Picking your own card again takes it
+ * back; picking another card when you've picked all yours moves your oldest pick.
+ * Once the round has been open for COVER_MS, a player who has picked can also pick
+ * for someone who hasn't. The round is flipped as soon as every pick is in.
+ */
+const pick = async (req: Request, me: PlayerRow, env: Env, id: string) => {
   const r = await loadRoom(env, id);
   const data = await body(req);
   if (r.status !== 'playing' || !r.game_id) return memberView(env, r, me);
   const g = (await loadGame(env, r.game_id))!;
-  const seats = JSON.parse(g.seats) as string[];
+  const play = await loadPlay(env, g);
+  const { game, picks, seats } = play;
   const mySeat = seats.indexOf(me.id);
   if (mySeat < 0) throw new HttpError(403, 'You are not playing in this game');
-  const flips = await loadFlips(env, g.id);
-  const game = replay(configOf(g), flips.map((f) => f.cell));
-  const now = Date.now();
-  // A flip meant for a board that has moved on (a repeat, or someone else was quicker) is ignored.
-  if (Number(data.n) !== game.state.flips || game.state.over) return memberView(env, r, me);
-  const lastAt = flips.length ? flips[flips.length - 1].created_at : g.started_at;
-  if (game.state.turn !== mySeat && now < lastAt + COVER_MS) throw new HttpError(409, 'It is not your turn');
-  if (game.state.lastMiss && now < lastAt + MISS_PAUSE_MS) throw new HttpError(425, 'Wait a moment so everyone can see the cards');
-  const problem = game.problem(data.cell);
+  // A pick meant for a round that has already been flipped is ignored.
+  if (Number(data.round) !== game.state.rounds || game.state.over) return memberView(env, r, me);
+  const problem = game.cellProblem(data.cell);
   if (problem) throw new HttpError(400, problem);
   const cell = data.cell as number;
-  const inserted = await env.DB.prepare('INSERT OR IGNORE INTO flips (game_id, n, cell, actor, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(g.id, game.state.flips, cell, me.id, now)
-    .run();
-  if (inserted.meta.changes === 1) {
-    game.flip(cell);
-    if (game.state.over) await finishGame(env, r, g.id, 'won');
-    else if (game.state.flips % 10 === 0) await touch(env, r.id);
+  const quota = picksPerPlayer(seats.length);
+  const now = Date.now();
+  const freeSlot = (seat: number) => [...Array(quota).keys()].find((slot) => !picks.some((p) => p.seat === seat && p.slot === slot));
+  const insert = (seat: number, slot: number) =>
+    env.DB.prepare('INSERT INTO picks (game_id, round, seat, slot, cell, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(g.id, game.state.rounds, seat, slot, cell, me.id, now)
+      .run();
+  const taken = picks.find((p) => p.cell === cell);
+  try {
+    if (taken) {
+      if (taken.seat !== mySeat && taken.actor !== me.id) throw new HttpError(409, 'Someone else picked that card');
+      await env.DB.prepare('DELETE FROM picks WHERE game_id = ? AND round = ? AND seat = ? AND slot = ?').bind(g.id, game.state.rounds, taken.seat, taken.slot).run();
+    } else if (freeSlot(mySeat) !== undefined) {
+      await insert(mySeat, freeSlot(mySeat)!);
+    } else {
+      const away = now >= play.roundStartedAt + COVER_MS ? seats.findIndex((_, seat) => freeSlot(seat) !== undefined) : -1;
+      if (away >= 0) await insert(away, freeSlot(away)!);
+      else {
+        const oldest = picks.filter((p) => p.seat === mySeat).sort((a, b) => a.created_at - b.created_at)[0];
+        await env.DB.prepare('UPDATE picks SET cell = ?, actor = ?, created_at = ? WHERE game_id = ? AND round = ? AND seat = ? AND slot = ?')
+          .bind(cell, me.id, now, g.id, game.state.rounds, oldest.seat, oldest.slot)
+          .run();
+      }
+    }
+  } catch (e) {
+    // Two players picked the same card, or the same slot, at the same moment.
+    if (isUniqueViolation(e)) throw new HttpError(409, 'Someone just picked that card');
+    throw e;
   }
+  await flipIfReady(env, r, g);
   return memberView(env, await loadRoom(env, id), me);
+};
+
+/** Flips the round (once) when every player's picks are in. */
+const flipIfReady = async (env: Env, r: RoomRow, g: GameRow) => {
+  const { game, picks } = await loadPlay(env, g);
+  if (picks.length !== g.set_size) return;
+  const cells = picks.map((p) => p.cell);
+  if (game.roundProblem(cells)) return;
+  const inserted = await env.DB.prepare('INSERT OR IGNORE INTO rounds (game_id, n, cells, created_at) VALUES (?, ?, ?, ?)')
+    .bind(g.id, game.state.rounds, JSON.stringify(cells), Date.now())
+    .run();
+  if (inserted.meta.changes !== 1) return;
+  game.play(cells);
+  if (game.state.over) await finishGame(env, r, g.id, 'won');
+  else if (game.state.rounds % 5 === 0) await touch(env, r.id);
 };
 
 /** The host stops the game in progress; the room goes back to choosing the next one. */
@@ -453,7 +506,7 @@ const route = async (req: Request, env: Env): Promise<Response> => {
   if (path === '/api/me/room' && method === 'GET') return currentRoom(me, env);
   if (path === '/api/rooms' && method === 'POST') return createRoom(req, me, env);
   if (path === '/api/rooms/join' && method === 'POST') return joinRoom(req, me, env);
-  const room = path.match(/^\/api\/rooms\/([0-9a-f]{16})(?:\/(settings|start|flip|end|leave))?$/);
+  const room = path.match(/^\/api\/rooms\/([0-9a-f]{16})(?:\/(settings|start|pick|end|leave))?$/);
   if (room && !room[2] && method === 'GET') return memberView(env, await loadRoom(env, room[1]), me);
   if (room && room[2] && method === 'POST') {
     const id = room[1];
@@ -462,8 +515,8 @@ const route = async (req: Request, env: Env): Promise<Response> => {
         return changeSettings(req, me, env, id);
       case 'start':
         return startGame(me, env, id);
-      case 'flip':
-        return flip(req, me, env, id);
+      case 'pick':
+        return pick(req, me, env, id);
       case 'end':
         return endGame(me, env, id);
       case 'leave':

@@ -2,17 +2,18 @@
  * The cooperative memory game, shared by the browser and the server.
  *
  * The board is dealt from a seed. A game is replayed from that seed and the list
- * of flipped cells, so the server only stores the flips and the browser never
+ * of rounds played, so the server only stores the rounds and the browser never
  * needs to know a card before it is turned over.
  *
  * Rules:
  * - Every number appears `setSize` times; the set size is the number of players
  *   (at least 2, so a solo player looks for pairs).
- * - Players flip one card each, in turn order, round-robin across the whole game.
- * - An attempt is open while its face-up cards all show the same number. When it
- *   holds `setSize` matching cards the set is closed and stays face up.
- * - The first card that doesn't match ends the attempt as a miss: its cards are
- *   shown to everyone and then turned face down again.
+ * - The team plays in rounds. In each round every player picks one card (a solo
+ *   player picks two) while the cards stay face down; players can see who picked
+ *   which card and change their pick until the last one is in.
+ * - Then all the picked cards flip at once. If they all show the same number the
+ *   set is closed and stays face up; otherwise it's a miss: everyone sees the
+ *   cards, then they turn face down again.
  * - The team wins together when every set is closed.
  */
 
@@ -23,6 +24,9 @@ export const GRID_MAX = 8;
 
 /** How many matching cards make a set for this many players. */
 export const setSizeFor = (players: number) => Math.max(2, Math.min(MAX_PLAYERS, players));
+
+/** How many cards each player picks per round. */
+export const picksPerPlayer = (players: number) => setSizeFor(players) / Math.max(1, players);
 
 /** How many cards fit on a grid: whole sets only, the remaining cells stay empty. */
 export const layoutOf = (rows: number, cols: number, setSize: number) => {
@@ -65,8 +69,6 @@ export interface GameConfig {
   rows: number;
   cols: number;
   setSize: number;
-  /** Players in turn order. */
-  players: number;
   seed: number;
 }
 
@@ -74,7 +76,7 @@ export interface GameConfig {
  * The value under each cell (1..sets), or null for an empty cell. Empty cells
  * are the last ones on the board, so the cards stay in one block.
  */
-export const deal = (config: Pick<GameConfig, 'rows' | 'cols' | 'setSize' | 'seed'>): (number | null)[] => {
+export const deal = (config: GameConfig): (number | null)[] => {
   const { cards, empty } = layoutOf(config.rows, config.cols, config.setSize);
   const deck = Array.from({ length: cards }, (_, i) => Math.floor(i / config.setSize) + 1);
   const random = seededRandom(config.seed);
@@ -85,26 +87,19 @@ export const deal = (config: Pick<GameConfig, 'rows' | 'cols' | 'setSize' | 'see
   return [...deck, ...Array<null>(empty).fill(null)];
 };
 
-export type FlipResult = 'open' | 'set' | 'miss';
+export type RoundResult = 'set' | 'miss';
 
 export interface GameState {
-  /** The seat that closed each cell's set, or null while it's still in play. */
-  closedBy: (number | null)[];
-  /** Cells of the attempt in progress, in the order they were flipped. */
-  open: number[];
-  /** Cells of the attempt that just failed, until the next flip. */
+  /** Whether each cell's set has been closed. */
+  closed: boolean[];
+  /** The cells of the round that just missed, until the next round. */
   lastMiss: number[] | null;
-  /** The result of the latest flip. */
-  last: { cell: number; seat: number; result: FlipResult } | null;
-  flips: number;
-  /** Finished attempts: closed sets plus misses. */
-  attempts: number;
+  /** The latest round. */
+  last: { cells: number[]; result: RoundResult } | null;
+  /** Rounds played: closed sets plus misses. */
+  rounds: number;
   misses: number;
   setsClosed: number;
-  /** Sets closed on each seat's turn. */
-  setsBySeat: number[];
-  /** Whose turn it is. */
-  turn: number;
   over: boolean;
 }
 
@@ -116,75 +111,54 @@ export class MemoryGame {
   constructor(readonly config: GameConfig) {
     this.deck = deal(config);
     this.sets = layoutOf(config.rows, config.cols, config.setSize).sets;
-    this.state = {
-      closedBy: this.deck.map(() => null),
-      open: [],
-      lastMiss: null,
-      last: null,
-      flips: 0,
-      attempts: 0,
-      misses: 0,
-      setsClosed: 0,
-      setsBySeat: Array<number>(config.players).fill(0),
-      turn: 0,
-      over: false,
-    };
+    this.state = { closed: this.deck.map(() => false), lastMiss: null, last: null, rounds: 0, misses: 0, setsClosed: 0, over: false };
   }
 
-  /** Why this cell can't be flipped now, or null when it can. */
-  problem(cell: unknown): string | null {
-    const s = this.state;
-    if (s.over) return 'The game is over';
+  /** Why this cell can't be picked now, or null when it can. */
+  cellProblem(cell: unknown): string | null {
+    if (this.state.over) return 'The game is over';
     if (!Number.isInteger(cell) || (cell as number) < 0 || (cell as number) >= this.deck.length) return 'No such card';
-    const c = cell as number;
-    if (this.deck[c] === null) return 'That cell is empty';
-    if (s.closedBy[c] !== null) return 'That set is already closed';
-    if (s.open.includes(c)) return 'That card is already face up';
+    if (this.deck[cell as number] === null) return 'That cell is empty';
+    if (this.state.closed[cell as number]) return 'That set is already closed';
     return null;
   }
 
-  /** Flips a card on the current player's turn. */
-  flip(cell: number): FlipResult {
-    const why = this.problem(cell);
-    if (why) throw new Error(why);
-    const s = this.state;
-    const seat = s.turn;
-    s.lastMiss = null;
-    s.open.push(cell);
-    s.flips++;
-    s.turn = s.flips % this.config.players;
-    const value = this.deck[cell];
-    let result: FlipResult = 'open';
-    if (s.open.some((c) => this.deck[c] !== value)) {
-      result = 'miss';
-      s.lastMiss = s.open;
-      s.open = [];
-      s.attempts++;
-      s.misses++;
-    } else if (s.open.length === this.config.setSize) {
-      result = 'set';
-      for (const c of s.open) s.closedBy[c] = seat;
-      s.open = [];
-      s.attempts++;
-      s.setsClosed++;
-      s.setsBySeat[seat]++;
-      s.over = s.setsClosed === this.sets;
+  /** Why these cells can't be played as a round, or null when they can. */
+  roundProblem(cells: unknown[]): string | null {
+    if (cells.length !== this.config.setSize) return `A round needs ${this.config.setSize} cards`;
+    if (new Set(cells).size !== cells.length) return 'Each card can be picked once';
+    for (const c of cells) {
+      const why = this.cellProblem(c);
+      if (why) return why;
     }
-    s.last = { cell, seat, result };
-    return result;
+    return null;
   }
 
-  /** The value of a cell, as everyone may see it now: face up, closed, or just missed. */
-  visible(cell: number): number | null {
+  /** Flips the team's picked cards together. */
+  play(cells: number[]): RoundResult {
+    const why = this.roundProblem(cells);
+    if (why) throw new Error(why);
     const s = this.state;
-    const shown = s.closedBy[cell] !== null || s.open.includes(cell) || !!s.lastMiss?.includes(cell);
-    return shown ? this.deck[cell] : null;
+    const value = this.deck[cells[0]];
+    const result: RoundResult = cells.every((c) => this.deck[c] === value) ? 'set' : 'miss';
+    s.rounds++;
+    if (result === 'set') {
+      for (const c of cells) s.closed[c] = true;
+      s.setsClosed++;
+      s.lastMiss = null;
+      s.over = s.setsClosed === this.sets;
+    } else {
+      s.misses++;
+      s.lastMiss = [...cells];
+    }
+    s.last = { cells: [...cells], result };
+    return result;
   }
 }
 
-/** Replays a game from its flips. */
-export const replay = (config: GameConfig, flips: number[]) => {
+/** Replays a game from its rounds. */
+export const replay = (config: GameConfig, rounds: number[][]) => {
   const game = new MemoryGame(config);
-  for (const cell of flips) game.flip(cell);
+  for (const cells of rounds) game.play(cells);
   return game;
 };

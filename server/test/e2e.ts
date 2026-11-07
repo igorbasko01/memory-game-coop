@@ -48,9 +48,19 @@ const main = async () => {
   assert(room.status === 'playing' && room.game?.setSize === 3 && room.game.sets === 4, 'the game starts with four sets of three');
   assert(room.game!.cells.every((x) => x.state === 'down'), 'no card is shown before it is flipped');
   assert((await request('/api/rooms/join', d.token, { code: created.code })).status === 409, 'nobody joins a game in progress');
-  assert((await request(`/api/rooms/${id}/flip`, b.token, { n: 0, cell: 0 })).status === 409, 'players wait for their turn');
 
-  // Each player remembers every card they have seen.
+  // The first round: picks are visible (face down) and can be changed until everyone has picked.
+  const pickFor = (token: string, round: number, cell: number) => call(`/api/rooms/${id}/pick`, token, { round, cell });
+  room = await pickFor(a.token, 0, 0);
+  assert(room.game!.picks.length === 1 && room.game!.picks[0].seat === 0 && room.members[0].picked === 1, 'a pick is shown to everyone, face down');
+  assert(room.game!.cells[0].state === 'down', 'a picked card stays face down');
+  assert((await request(`/api/rooms/${id}/pick`, b.token, { round: 0, cell: 0 })).status === 409, 'a card can only be picked by one player');
+  room = await pickFor(a.token, 0, 1);
+  assert(room.game!.picks.map((p) => p.cell).join() === '1', 'picking another card moves your pick');
+  room = await pickFor(a.token, 0, 1);
+  assert(room.game!.picks.length === 0, 'picking your card again takes it back');
+
+  // Each round every player picks one card; they remember every card they have seen.
   const tokens = [a.token, b.token, c.token];
   const known = new Map<number, number>();
   let misses = 0;
@@ -58,28 +68,24 @@ const main = async () => {
     const g = room.game!;
     g.cells.forEach((x, i) => 'value' in x && known.set(i, x.value));
     const playable = (i: number) => g.cells[i].state === 'down' || g.cells[i].state === 'miss';
-    const unknown = g.cells.findIndex((x, i) => playable(i) && !known.has(i));
-    let cell: number;
-    if (g.open.length) {
-      const want = known.get(g.open[0]);
-      const match = [...known].find(([i, v]) => v === want && playable(i));
-      cell = match ? match[0] : unknown;
-    } else {
-      const counts = new Map<number, number[]>();
-      for (const [i, v] of known) if (playable(i)) counts.set(v, [...(counts.get(v) ?? []), i]);
-      const full = [...counts.values()].find((cells) => cells.length === g.setSize);
-      cell = full ? full[0] : unknown;
+    const counts = new Map<number, number[]>();
+    for (const [i, v] of known) if (playable(i)) counts.set(v, [...(counts.get(v) ?? []), i]);
+    const full = [...counts.values()].find((cells) => cells.length === g.setSize);
+    const unknown = g.cells.map((_, i) => i).filter((i) => playable(i) && !known.has(i));
+    const cells = full ?? [...unknown, ...[...known.keys()].filter(playable)].slice(0, g.setSize);
+    for (const [seat, cell] of cells.entries()) {
+      room = await pickFor(tokens[seat], g.round, cell);
+      if (seat < cells.length - 1) assert(room.game!.round === g.round, `round ${g.round + 1}: waits for every pick`);
     }
-    if (g.lastMiss) await sleep(950);
-    const before = g.flips;
-    room = await call(`/api/rooms/${id}/flip`, tokens[g.turn], { n: g.flips, cell });
-    assert(room.game!.flips === before + 1, `flip ${before + 1}: ${room.game!.last!.result}`);
-    if (room.game!.last!.result === 'miss') misses++;
+    assert(room.game!.round === g.round + 1, `round ${g.round + 1}: flipped, ${room.game!.last!.result}`);
+    if (room.game!.last!.result === 'miss') {
+      misses++;
+      assert(room.game!.lastMiss!.every((c) => room.game!.cells[c].state === 'miss'), 'a missed round shows its cards');
+    }
   }
   const g = room.game!;
   assert(room.status === 'finished' && g.status === 'won' && g.setsClosed === 4, 'the team wins when every set is closed');
-  assert(g.misses === misses && g.attempts === misses + 4, 'misses and attempts are counted');
-  assert(room.members.reduce((n, m) => n + m.sets, 0) === 4, 'every set is credited to a player');
+  assert(g.misses === misses && g.round === misses + 4, 'misses and rounds are counted');
   const watched: RoomView = await call(`/api/tv/${created.code}`);
   assert(watched.game?.status === 'won' && watched.game.cells.every((x) => x.state === 'closed'), 'the TV sees the finished board');
 

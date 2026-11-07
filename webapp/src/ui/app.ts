@@ -1,9 +1,8 @@
 import { GRID_MAX, GRID_MIN, GRID_PRESETS, gridProblem, layoutOf } from '../engine/game';
 import { api, ApiError, linkWith, loadIdentity, saveIdentity, type Identity } from '../online/client';
 import type { GameView, RoomView } from '../online/types';
-import { Board } from './board';
+import { Board, MISS_SHOW_MS, missShowing } from './board';
 import {
-  attemptLine,
   esc,
   gridSummary,
   howToPlayHtml,
@@ -13,13 +12,13 @@ import {
   sleep,
   statsHtml,
   tickClocks,
+  lastRoundLine,
+  roundLine,
+  stillPicking,
   trayHtml,
-  turnPlayer,
 } from './parts';
 
 const POLL_MS = 900;
-/** After a miss, wait this long (server time) before flipping, as the server does. */
-const MISS_PAUSE_MS = 1000;
 
 /** The game on a phone: name, home, lobby, the board on your turn, and the result. */
 export class PhoneApp {
@@ -30,10 +29,11 @@ export class PhoneApp {
   private board: Board | null = null;
   /** Server clock minus this device's clock. */
   private clockOffset = 0;
-  private flipping = false;
+  private picking = false;
   private layoutKey = '';
   private panelKey = '';
-  private wasMyTurn = false;
+  /** The round this device last showed, to notice when a new one starts. */
+  private shownRound = -1;
   private tickTimer = 0;
   private unlockTimer = 0;
 
@@ -205,10 +205,10 @@ export class PhoneApp {
   private async poll(generation: number) {
     while (generation === this.generation) {
       await sleep(POLL_MS);
-      if (generation !== this.generation || !this.room || this.flipping) continue;
+      if (generation !== this.generation || !this.room || this.picking) continue;
       try {
         const room = await api.room(this.token, this.room.id);
-        if (generation === this.generation && !this.flipping) this.apply(room);
+        if (generation === this.generation && !this.picking) this.apply(room);
       } catch (e) {
         if (e instanceof ApiError && (e.status === 403 || e.status === 404)) {
           this.toast('You are no longer in that room');
@@ -378,14 +378,12 @@ export class PhoneApp {
   }
 
   private resultHtml(room: RoomView, game: GameView) {
-    const best = Math.max(...room.members.map((m) => m.sets));
     return `<section class="panel result ${game.status}">
       <h2>${game.status === 'won' ? 'Board cleared!' : 'Game over'}</h2>
       <p class="verdict">${esc(resultLine(game))}</p>
       ${statsHtml(game, room.now)}
       <ul class="members">${room.members
-        .map((m) => memberHtml(m, { you: room.you, showSets: true }).replace('<li class="member', `<li class="member${m.sets === best && best > 0 ? ' is-star' : ''}`))
-        .join('')}</ul>
+.map((m) => memberHtml(m, { you: room.you })).join('')}</ul>
     </section>`;
   }
 
@@ -414,47 +412,60 @@ export class PhoneApp {
   private renderGame(room: RoomView, game: GameView) {
     const seat = this.mySeat;
     const serverNow = Date.now() + this.clockOffset;
-    const myTurn = seat === game.turn;
-    const cover = seat >= 0 && !myTurn && serverNow >= game.coverAt;
-    const pauseUntil = game.lastMiss ? game.lastFlipAt + MISS_PAUSE_MS : 0;
-    const paused = serverNow < pauseUntil;
-    const canFlip = (myTurn || cover) && !this.flipping && !paused && game.status === 'playing';
-    if (myTurn && !this.wasMyTurn) navigator.vibrate?.(60);
-    this.wasMyTurn = myTurn;
+    const me = room.members[seat];
+    const playing = game.status === 'playing' && seat >= 0;
+    const needToPick = playing && !!me && me.picked < game.picksPerPlayer;
+    const showingMiss = missShowing(game, serverNow);
+    const waiting = stillPicking(room, game).filter((m) => m.id !== room.you);
+    const cover = playing && !needToPick && waiting.length > 0 && serverNow >= game.coverAt;
+    const canPick = playing && !this.picking && !showingMiss;
+    if (game.round !== this.shownRound) {
+      if (this.shownRound >= 0 && game.last) navigator.vibrate?.(game.last.result === 'set' ? [40, 40, 80] : 150);
+      this.shownRound = game.round;
+    }
 
-    const turn = turnPlayer(room, game);
     const banner = this.root.querySelector<HTMLElement>('.turn-banner')!;
-    banner.style.setProperty('--seat-color', seatColor(game.turn));
-    banner.classList.toggle('mine', myTurn);
+    banner.style.setProperty('--seat-color', seatColor(Math.max(0, seat)));
+    banner.classList.toggle('mine', needToPick && !showingMiss);
+    const line = showingMiss
+      ? 'Remember these cards!'
+      : cover
+        ? `${waiting.map((m) => m.nickname).join(', ')} seem${waiting.length === 1 ? 's' : ''} away · tap a card to pick for them`
+        : roundLine(room, game, room.you);
     banner.innerHTML = `
-      <div class="turn-who">${myTurn ? '<b>Your turn</b> · flip a card' : cover ? `<b>${esc(turn.nickname)}</b> seems away · you can flip for them` : `<b>${esc(turn.nickname)}</b>’s turn`}</div>
-      <div class="turn-what">${esc(attemptLine(game))}</div>
-      ${trayHtml(game, room.members.length)}`;
+      <div class="turn-who"><b>Round ${game.round + 1}</b> · ${esc(line)}</div>
+      <div class="turn-what">${esc(needToPick && me.picked > 0 ? 'Tap your card again to take it back, or another to move it' : lastRoundLine(game))}</div>
+      ${trayHtml(room, game)}`;
     this.root.querySelector<HTMLElement>('.game-foot')!.innerHTML = `
       ${statsHtml(game, room.now)}
-      <ul class="members mini">${room.members.map((m) => memberHtml(m, { you: room.you, turn: game.turn, showSets: true })).join('')}</ul>`;
+      <ul class="members mini">${room.members.map((m) => memberHtml(m, { you: room.you, picks: game.status === 'playing' ? game.picksPerPlayer : null })).join('')}</ul>`;
 
-    this.board!.update(game, { playable: () => canFlip, onFlip: (cell) => this.flip(cell) });
+    this.board!.update(game, {
+      // Free cards, or your own pick (to take it back). Someone else's pick is theirs.
+      playable: (cell) => canPick && game.picks.every((p) => p.cell !== cell || p.seat === seat),
+      onPick: (cell) => this.pick(cell),
+      initials: room.members.map((m) => m.nickname.slice(0, 1).toUpperCase()),
+      mySeat: seat,
+      clockOffset: this.clockOffset,
+    });
+    // Look again when the missed cards turn over, or when covering for someone becomes possible.
     clearTimeout(this.unlockTimer);
-    if (paused && (myTurn || cover)) this.unlockTimer = window.setTimeout(() => this.room && this.apply(this.room), pauseUntil - serverNow + 30);
+    const next = [showingMiss ? game.roundStartedAt + MISS_SHOW_MS : 0, !cover && waiting.length ? game.coverAt : 0].filter((t) => t > serverNow);
+    if (next.length) this.unlockTimer = window.setTimeout(() => this.room && this.apply(this.room), Math.min(...next) - serverNow + 30);
   }
 
-  private async flip(cell: number) {
+  private async pick(cell: number) {
     const room = this.room;
     const game = room?.game;
-    if (!room || !game || this.flipping) return;
-    this.flipping = true;
-    this.renderGame(room, game);
+    if (!room || !game || this.picking) return;
+    this.picking = true;
     try {
-      const next = await api.flip(this.token, room.id, game.flips, cell);
-      const result = next.game?.flips === game.flips + 1 ? next.game.last?.result : null;
-      if (result === 'set') navigator.vibrate?.([40, 40, 80]);
-      if (result === 'miss') navigator.vibrate?.(150);
-      this.flipping = false;
+      const next = await api.pick(this.token, room.id, game.round, cell);
+      this.picking = false;
       this.apply(next);
     } catch (e) {
-      this.flipping = false;
-      if (!(e instanceof ApiError && e.status === 425)) this.fail(e);
+      this.picking = false;
+      this.fail(e);
       try {
         this.apply(await api.room(this.token, room.id));
       } catch {

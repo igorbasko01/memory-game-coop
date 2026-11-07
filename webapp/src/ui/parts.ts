@@ -27,45 +27,49 @@ export const gridSummary = (rows: number, cols: number, setSize: number) => {
   return `${rows}×${cols} · ${l.sets} sets of ${setSize}${l.empty ? ` · ${l.empty} empty` : ''}`;
 };
 
-/** The player whose turn it is. */
-export const turnPlayer = (room: RoomView, game: GameView) => room.members[game.turn];
+/** The players who still have cards to pick this round. */
+export const stillPicking = (room: RoomView, game: GameView) => room.members.filter((m) => m.picked < game.picksPerPlayer);
 
-/** A short, live line about the attempt in progress. */
-export const attemptLine = (game: GameView) => {
+const names = (list: string[]) => (list.length <= 1 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`);
+
+/** A short, live line about the round being chosen, as one player (or the TV) sees it. */
+export const roundLine = (room: RoomView, game: GameView, you: string | null = null) => {
   if (game.status !== 'playing') return '';
-  if (game.open.length) {
-    const v = (game.cells[game.open[0]] as { value: number }).value;
-    const left = game.setSize - game.open.length;
-    return `Find ${left} more ${v}${left === 1 ? '' : 's'}`;
+  const waiting = stillPicking(room, game);
+  const me = waiting.find((m) => m.id === you);
+  const others = waiting.filter((m) => m.id !== you).map((m) => m.nickname);
+  if (me) {
+    const left = game.picksPerPlayer - me.picked;
+    return game.picksPerPlayer > 1 ? `Pick ${left} more card${left === 1 ? '' : 's'}` : 'Pick a card';
   }
-  if (game.last?.result === 'set') return 'Set closed! Start a new one';
-  if (game.last?.result === 'miss') return 'Not a match. Start a new set';
-  return `Turn up ${game.setSize} matching cards, one each`;
+  if (others.length) return `Waiting for ${names(others)}`;
+  return 'Flipping…';
 };
 
-/** The slots of the attempt in progress: one per card of a set. */
-export const trayHtml = (game: GameView, players: number) => {
-  const slots = [];
-  for (let i = 0; i < game.setSize; i++) {
-    const cell = game.open[i];
-    const c = cell === undefined ? null : game.cells[cell];
-    // Each card of a set is flipped by the next player in turn order.
-    const owner = seatColor((((game.turn - game.open.length + i) % players) + players) % players);
-    slots.push(
-      c && 'value' in c
-        ? `<span class="slot filled" style="--slot-color:${owner}">${c.value}</span>`
-        : `<span class="slot" style="--slot-color:${owner}"></span>`,
-    );
-  }
-  return `<div class="tray" aria-label="Cards of this set">${slots.join('')}</div>`;
+/** What the last round did, for a moment after it flipped. */
+export const lastRoundLine = (game: GameView) => {
+  if (!game.last) return `Find ${game.setSize} matching cards: everyone picks, then they flip together`;
+  const v = (game.cells[game.last.cells[0]] as { value?: number }).value;
+  return game.last.result === 'set' ? `Last round: a set of ${v}s ✨` : 'Last round: not a match';
 };
 
-export const memberHtml = (m: MemberView, opts: { you?: string | null; turn?: number | null; showSets?: boolean } = {}) => {
+/** One slot per card of the round, in each player's colour, filled once picked. */
+export const trayHtml = (room: RoomView, game: GameView) => {
+  const slots = room.members.flatMap((m) =>
+    [...Array(game.picksPerPlayer).keys()].map(
+      (i) => `<span class="slot${i < m.picked ? ' filled' : ''}" style="--slot-color:${seatColor(m.seat)}" title="${esc(m.nickname)}">${i < m.picked ? '✓' : ''}</span>`,
+    ),
+  );
+  return `<div class="tray" aria-label="Picks this round">${slots.join('')}</div>`;
+};
+
+export const memberHtml = (m: MemberView, opts: { you?: string | null; picks?: number | null } = {}) => {
   const tags = [m.host ? 'host' : '', m.id === opts.you ? 'you' : '', m.left ? 'left' : !m.online ? 'away' : ''].filter(Boolean);
-  return `<li class="member${opts.turn === m.seat ? ' is-turn' : ''}${m.online && !m.left ? '' : ' is-away'}" style="--seat-color:${seatColor(m.seat)}">
+  const done = opts.picks != null && m.picked >= opts.picks;
+  return `<li class="member${opts.picks != null && !done ? ' is-picking' : ''}${done ? ' is-done' : ''}${m.online && !m.left ? '' : ' is-away'}" style="--seat-color:${seatColor(m.seat)}">
     <span class="avatar">${esc(m.nickname.slice(0, 1).toUpperCase())}</span>
     <span class="member-name">${esc(m.nickname)}${tags.map((t) => ` <small class="tag">${t}</small>`).join('')}</span>
-    ${opts.showSets ? `<span class="member-sets" title="Sets closed">${m.sets}</span>` : ''}
+    ${opts.picks != null ? `<span class="member-status">${done ? '✓' : '…'}</span>` : ''}
   </li>`;
 };
 
@@ -101,8 +105,8 @@ export const howToPlayHtml = `
   <ol class="rules">
     <li>One player creates a room and picks a grid; everyone else joins with the room code (1–4 players).</li>
     <li>Every number is on as many cards as there are players: with 3 players you look for <b>3 matching cards</b> (a solo player looks for pairs).</li>
-    <li>Take turns flipping <b>one card each</b>. Keep going while the cards match; when a set is complete it stays face up.</li>
-    <li>A card that doesn't match ends the attempt: everyone sees the cards, then they turn back over. Remember them!</li>
+    <li>You play as a team, in rounds: <b>everyone picks one card</b> (solo: two). You can see where the others picked and change your pick until the last one is in.</li>
+    <li>Then all the picked cards <b>flip together</b>. All the same number? The set is closed and stays face up. Otherwise everyone sees the cards, then they turn back over. Remember them!</li>
     <li>You win together when every set is closed. Talk to each other: it's a team game.</li>
     <li>Got a TV? Open the game on it, choose <b>Use this screen as a TV</b> and enter the room code: it shows the board for everyone.</li>
   </ol>`;

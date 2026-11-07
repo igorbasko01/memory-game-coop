@@ -49,13 +49,27 @@ CREATE TABLE games (
 );
 CREATE INDEX games_room ON games (room_id, started_at);
 
--- Every flipped card, numbered from 0. The primary key makes two flips at once impossible.
-CREATE TABLE flips (
+-- Every round the team played: the cards picked, flipped together. Numbered from 0.
+CREATE TABLE rounds (
   game_id TEXT NOT NULL REFERENCES games(id),
   n INTEGER NOT NULL,
-  cell INTEGER NOT NULL,
-  -- The player who flipped it (another player can cover for someone who is away).
-  actor TEXT NOT NULL REFERENCES players(id),
+  -- Cell indexes (JSON array), in seat order.
+  cells TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (game_id, n)
+);
+
+-- The picks of the round being chosen: one row per seat and slot (a solo player has two slots).
+-- A card can only be picked once per round.
+CREATE TABLE picks (
+  game_id TEXT NOT NULL REFERENCES games(id),
+  round INTEGER NOT NULL,
+  seat INTEGER NOT NULL,
+  slot INTEGER NOT NULL,
+  cell INTEGER NOT NULL,
+  -- Who picked it: another player can pick for someone who is away.
+  actor TEXT NOT NULL REFERENCES players(id),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (game_id, round, seat, slot),
+  UNIQUE (game_id, round, cell)
 );

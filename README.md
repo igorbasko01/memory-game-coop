@@ -6,10 +6,11 @@ A **cooperative online memory game** for 1–4 players, with an optional TV as t
 
 - One player creates a **room** and picks a **grid** (presets from 3×4 to 6×8, or any size from 2×2 to 8×8). Everyone else joins on their phone with the 4-letter room code, the invite link, or the QR code on the TV.
 - The cards are numbered, and **every number appears once per player**: with 3 players you look for **3 matching cards** to close a set (a solo player looks for pairs). Cells that don't fit a whole set stay empty.
-- Players take turns flipping **one card each**, round-robin. An attempt continues while the cards match; when it has a full set, the set stays face up. The first card that doesn't match ends the attempt: everyone sees the cards for a moment, then they turn back over.
-- The team wins together when every set is closed. The result shows the time, the misses, and who closed each set.
-- **TV mode:** open the game on a TV (or laptop), choose *Use this screen as a TV* and enter the room code (or open `/?tv=ABCD`). In the lobby it shows a big QR code and the code for joining, and the players as they arrive; during the game it shows the board, whose turn it is, the set being built, stats and a flash for every set and miss. Phones show *📺 TV on* while it's connected. The TV needs no account and never sees a card before it's flipped.
-- If a player drops out, anyone can flip for them after 20 seconds. The host can end a game, change the grid and start the next one (*Play again*); new players can join between games.
+- The team plays **in rounds, not turns**: every player picks one card (a solo player picks two). Picks show on everyone's screen as coloured markers on the face-down cards, so you can coordinate, and you can change or take back your pick until the last one is in.
+- Then all the picked cards **flip together**. If they all match, the set is closed and stays face up; otherwise everyone sees the cards for a moment, then they turn back over.
+- The team wins together when every set is closed. The result shows the time, the rounds and the misses.
+- **TV mode:** open the game on a TV (or laptop), choose *Use this screen as a TV* and enter the room code (or open `/?tv=ABCD`). In the lobby it shows a big QR code and the code for joining, and the players as they arrive; during the game it shows the board with everyone's picks, who is still picking, stats and a flash for every set and miss. Phones show *📺 TV on* while it's connected. The TV needs no account and never sees a card before it's flipped.
+- If a player drops out, once a round has been open for 20 seconds anyone who has picked can pick for them. The host can end a game, change the grid and start the next one (*Play again*); new players can join between games.
 
 ## Architecture
 
@@ -17,7 +18,7 @@ Same shape as [tennis_strategy_game](https://github.com/igorbasko01/tennis_strat
 
 ```
 webapp/                 # Vite + TypeScript, no framework (DOM + CSS)
-├── src/engine/game.ts  # The rules: dealing from a seed, flips, sets, misses. Shared with the server, unit tested
+├── src/engine/game.ts  # The rules: dealing from a seed, rounds, sets, misses. Shared with the server, unit tested
 ├── src/online/         # API client, device identity, the view types shared with the server
 └── src/ui/             # board.ts (the cards), app.ts (phone), tv.ts (big screen), parts.ts
 server/                 # One Cloudflare Worker + D1 (SQLite): serves webapp/dist and the API under /api/*
@@ -26,8 +27,8 @@ server/                 # One Cloudflare Worker + D1 (SQLite): serves webapp/dis
 └── test/e2e.ts         # Plays a whole 3-player game (and a TV) against a running server
 ```
 
-- **No stored game state.** A game is replayed from its random seed and the list of flips, with the same engine the browser uses. The deck only ever exists on the server; clients get the values of face-up cards only.
-- **Polling, not sockets.** Phones poll the room about once a second, the TV a little faster. Flips are numbered (`flips` primary key `(game_id, n)`), so two flips at once or a double tap can't both count.
+- **No stored game state.** A game is replayed from its random seed and the list of rounds played, with the same engine the browser uses. The deck only ever exists on the server; clients get the values of face-up cards only.
+- **Polling, not sockets.** Phones poll the room about once a second, the TV a little faster. The picks of the current round live in their own table, where a card can only be picked once; when the last pick comes in the round is written once (`rounds` primary key `(game_id, n)`), so it can't be flipped twice.
 - **Players** are per device: a nickname and a secret token (stored hashed) kept in the browser.
 
 See [server/README.md](server/README.md) for the API.

@@ -3,24 +3,29 @@
 export interface MemberView {
   id: string;
   nickname: string;
-  /** Turn order: join order in the lobby, frozen when a game starts. */
+  /** Join order in the lobby, frozen when a game starts. Also the player's colour. */
   seat: number;
   host: boolean;
   /** Checked in within the last few seconds. */
   online: boolean;
   /** Left the room after this game started. */
   left: boolean;
-  /** Sets closed on this player's turns in the current or last game. */
-  sets: number;
+  /** Cards this player has picked in the round being chosen. */
+  picked: number;
 }
 
 /** A card as everyone may see it: values only for cards that are face up. */
 export type CellView =
   | { state: 'empty' }
   | { state: 'down' }
-  | { state: 'open'; value: number }
   | { state: 'miss'; value: number }
-  | { state: 'closed'; value: number; by: number };
+  | { state: 'closed'; value: number };
+
+/** A card picked for the round being chosen (still face down). */
+export interface PickView {
+  cell: number;
+  seat: number;
+}
 
 export interface GameView {
   id: string;
@@ -30,24 +35,24 @@ export interface GameView {
   cols: number;
   setSize: number;
   sets: number;
+  /** Cards each player picks per round (2 for a solo player, otherwise 1). */
+  picksPerPlayer: number;
   cells: CellView[];
-  /** Cells of the attempt in progress, in flip order. */
-  open: number[];
-  /** Cells of the attempt that just failed, until the next flip. */
+  /** The picks of the round being chosen. */
+  picks: PickView[];
+  /** Cells of the round that just missed, until the next round. */
   lastMiss: number[] | null;
-  last: { cell: number; seat: number; result: 'open' | 'set' | 'miss' } | null;
-  /** The seat whose turn it is. */
-  turn: number;
-  flips: number;
-  attempts: number;
+  /** The latest round played. */
+  last: { cells: number[]; result: 'set' | 'miss' } | null;
+  /** Rounds played so far: the one being chosen is number `round + 1`. */
+  round: number;
   misses: number;
   setsClosed: number;
-  /** Sets closed on each seat's turn. */
-  setsBySeat: number[];
   startedAt: number;
   finishedAt: number | null;
-  lastFlipAt: number;
-  /** From this time on anyone in the game may flip for the player whose turn it is. */
+  /** When the round being chosen began. */
+  roundStartedAt: number;
+  /** From this time on a player who has picked may also pick for someone who hasn't. */
   coverAt: number;
 }
 
@@ -60,7 +65,7 @@ export interface RoomView {
   hostId: string;
   /** The viewer's player id; null for a TV. */
   you: string | null;
-  /** In the lobby: who is in the room. During and after a game: its players, in turn order. */
+  /** In the lobby: who is in the room. During and after a game: its players, in seat order. */
   members: MemberView[];
   /** Players waiting in the room for the next game (joined after the last one started). */
   waiting: MemberView[];

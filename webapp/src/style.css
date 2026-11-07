@@ -413,8 +413,28 @@ input:focus {
   opacity: 0.55;
 }
 
-.member.is-star .member-sets::after {
-  content: ' ⭐';
+.member-status {
+  font-weight: 900;
+  font-size: 1.1rem;
+  color: var(--muted);
+}
+
+.member.is-done .member-status {
+  color: var(--seat-color);
+}
+
+.member.is-picking .member-status {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.members.big .member-status {
+  font-size: 3.6vh;
+}
+
+.turn-last {
+  margin: 0;
+  color: var(--muted);
+  font-size: 2.2vh;
 }
 
 .member.empty {
@@ -667,7 +687,7 @@ input:focus {
 
 .slot.filled {
   border-style: solid;
-  background: var(--card-face);
+  background: var(--slot-color);
   color: #141a33;
   animation: pop 0.25s ease-out;
 }
@@ -828,8 +848,46 @@ input:focus {
   animation: shake 0.4s ease-in-out 0.4s;
 }
 
-.card.is-open .card-face {
-  box-shadow: 0 0 0 3px var(--accent), 0 6px 18px rgba(255, 191, 60, 0.45);
+.pick-badge {
+  display: none;
+  position: absolute;
+  top: calc(var(--card-w) * -0.08);
+  right: calc(var(--card-w) * -0.08);
+  width: calc(var(--card-w) * 0.34);
+  height: calc(var(--card-w) * 0.34);
+  min-width: 18px;
+  min-height: 18px;
+  border-radius: 50%;
+  background: var(--pick-color);
+  color: #141a33;
+  font-weight: 900;
+  font-size: max(11px, calc(var(--card-w) * 0.2));
+  place-items: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  animation: pop 0.25s ease-out;
+}
+
+.card.is-picked .pick-badge {
+  display: grid;
+}
+
+.card.is-picked .card-inner {
+  transform: translateY(calc(var(--card-w) * -0.06));
+}
+
+.card.is-picked .card-back {
+  border: calc(var(--card-w) * 0.05) solid var(--pick-color);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25), 0 0 calc(var(--card-w) * 0.25) var(--pick-color);
+}
+
+.card.is-mine .card-back {
+  animation: glow 1.4s ease-in-out infinite;
+}
+
+@keyframes glow {
+  50% {
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25), 0 0 calc(var(--card-w) * 0.08) var(--pick-color);
+  }
 }
 
 .card.is-empty {
@@ -1114,8 +1172,8 @@ input:focus {
 }
 
 .turn-card {
-  background: color-mix(in srgb, var(--seat-color) 22%, var(--panel));
-  border: 0.4vh solid var(--seat-color);
+  background: var(--panel);
+  border: 0.4vh solid var(--line);
   border-radius: 2.4vh;
   padding: 2.4vh;
   display: grid;
@@ -1184,7 +1242,7 @@ input:focus {
   padding: 2vh 5vh;
   border-radius: 3vh;
   background: rgba(11, 15, 34, 0.88);
-  border: 0.5vh solid var(--seat-color);
+  border: 0.5vh solid var(--accent);
   white-space: nowrap;
   transition: opacity 0.25s, scale 0.35s cubic-bezier(0.3, 1.6, 0.5, 1);
 }
