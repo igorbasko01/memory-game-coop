@@ -71,7 +71,7 @@ export class PhoneApp {
     const el = document.createElement('div');
     el.className = 'toast';
     el.textContent = message;
-    document.body.append(el);
+    document.body.appendChild(el);
     setTimeout(() => el.classList.add('out'), 2600);
     setTimeout(() => el.remove(), 3100);
   }

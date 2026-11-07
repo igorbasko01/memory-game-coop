@@ -2,6 +2,19 @@ import './style.css';
 import { PhoneApp } from './ui/app';
 import { TvApp } from './ui/tv';
 
+/** Whether `gap` works on flex layouts (Chromium 84+); old TV browsers get margins instead. */
+const flexGap = () => {
+  const el = document.createElement('div');
+  el.style.cssText = 'display:flex;flex-direction:column;row-gap:1px;position:absolute';
+  el.appendChild(document.createElement('div'));
+  el.appendChild(document.createElement('div'));
+  document.body.appendChild(el);
+  const ok = el.scrollHeight === 1;
+  el.remove();
+  return ok;
+};
+if (!flexGap()) document.documentElement.classList.add('no-flex-gap');
+
 const root = document.getElementById('app')!;
 const params = new URLSearchParams(location.search);
 

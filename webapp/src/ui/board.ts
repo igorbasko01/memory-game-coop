@@ -34,16 +34,20 @@ export class Board {
   private game: GameView | null = null;
   private options: BoardOptions = {};
   private timer = 0;
-  private observer = new ResizeObserver(() => this.fit());
+  private readonly onResize = () => this.fit();
+  /** Missing on old TV browsers (Chromium < 64): they refit on window resizes instead. */
+  private observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(this.onResize);
 
   constructor(private readonly container: HTMLElement) {
     this.el.className = 'board';
-    container.append(this.el);
-    this.observer.observe(container);
+    container.appendChild(this.el);
+    if (this.observer) this.observer.observe(container);
+    else window.addEventListener('resize', this.onResize);
   }
 
   destroy() {
-    this.observer.disconnect();
+    this.observer?.disconnect();
+    window.removeEventListener('resize', this.onResize);
     clearTimeout(this.timer);
     this.el.remove();
   }
@@ -59,7 +63,7 @@ export class Board {
     this.gameId = game.id;
     this.rows = game.rows;
     this.cols = game.cols;
-    this.el.replaceChildren();
+    this.el.innerHTML = '';
     this.el.style.gridTemplateColumns = `repeat(${game.cols}, 1fr)`;
     this.cards = game.cells.map((_, i) => {
       const card = document.createElement('button');
@@ -70,7 +74,7 @@ export class Board {
       card.addEventListener('click', () => {
         if (this.options.playable?.(i)) this.options.onPick?.(i);
       });
-      this.el.append(card);
+      this.el.appendChild(card);
       return card;
     });
     this.fit();
