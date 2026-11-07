@@ -319,7 +319,15 @@ const joinRoom = async (req: Request, me: PlayerRow, env: Env) => {
   const r = await roomByCode(env, (await body(req)).code);
   const members = await loadMembers(env, r.id);
   if (members.some((m) => m.player_id === me.id)) return memberView(env, r, me);
-  if (r.status === 'playing') throw new HttpError(409, 'A game is in progress in that room. Join when it ends, or watch it on a TV.');
+  if (r.status === 'playing') {
+    // Someone who left (or was removed from) the game in progress can come back to their seat.
+    const g = r.game_id ? await loadGame(env, r.game_id) : null;
+    if (!g || !(JSON.parse(g.seats) as string[]).includes(me.id))
+      throw new HttpError(409, 'A game is in progress in that room. Join when it ends, or watch it on a TV.');
+    const now = Date.now();
+    await env.DB.prepare('INSERT OR IGNORE INTO room_members (room_id, player_id, joined_at, last_seen) VALUES (?, ?, ?, ?)').bind(r.id, me.id, now, now).run();
+    return memberView(env, r, me);
+  }
   if (members.length >= MAX_PLAYERS) throw new HttpError(409, `That room is full (${MAX_PLAYERS} players)`);
   const now = Date.now();
   await env.DB.prepare('INSERT OR IGNORE INTO room_members (room_id, player_id, joined_at, last_seen) VALUES (?, ?, ?, ?)').bind(r.id, me.id, now, now).run();
@@ -380,8 +388,8 @@ const isUniqueViolation = (e: unknown) => e instanceof Error && /UNIQUE constrai
 /**
  * Picks a card for the round being chosen. Picking your own card again takes it
  * back; picking another card when you've picked all yours moves your oldest pick.
- * Once the round has been open for COVER_MS, a player who has picked can also pick
- * for someone who hasn't. The round is flipped as soon as every pick is in.
+ * A player who has picked can also pick for someone who left the room, at once, or
+ * for anyone who hasn't picked once the round has been open for COVER_MS. The round is flipped as soon as every pick is in.
  */
 const pick = async (req: Request, me: PlayerRow, env: Env, id: string) => {
   const r = await loadRoom(env, id);
@@ -412,7 +420,11 @@ const pick = async (req: Request, me: PlayerRow, env: Env, id: string) => {
     } else if (freeSlot(mySeat) !== undefined) {
       await insert(mySeat, freeSlot(mySeat)!);
     } else {
-      const away = now >= play.roundStartedAt + COVER_MS ? seats.findIndex((_, seat) => freeSlot(seat) !== undefined) : -1;
+      // Someone who left the room can be picked for at once; anyone else once the round has been open COVER_MS.
+      const present = new Set((await loadMembers(env, r.id)).map((m) => m.player_id));
+      const open = seats.map((id, seat) => ({ seat, left: !present.has(id) })).filter((s) => freeSlot(s.seat) !== undefined);
+      const timedOut = now >= play.roundStartedAt + COVER_MS;
+      const away = (open.find((s) => s.left) ?? (timedOut ? open[0] : undefined))?.seat ?? -1;
       if (away >= 0) await insert(away, freeSlot(away)!);
       else {
         const oldest = picks.filter((p) => p.seat === mySeat).sort((a, b) => a.created_at - b.created_at)[0];
@@ -453,22 +465,38 @@ const endGame = async (me: PlayerRow, env: Env, id: string) => {
   return memberView(env, await loadRoom(env, id), me);
 };
 
-/** Leaves the room. Players in a game in progress stay until it ends. */
-const leaveRoom = async (me: PlayerRow, env: Env, id: string) => {
-  const r = await loadRoom(env, id);
-  if (r.status === 'playing' && r.game_id) {
-    const g = await loadGame(env, r.game_id);
-    if (g && (JSON.parse(g.seats) as string[]).includes(me.id)) {
-      if (r.host_id !== me.id) throw new HttpError(409, 'The game is still going. Ask the host to end it, or keep playing!');
-      await finishGame(env, r, r.game_id, 'ended');
-    }
-  }
-  await env.DB.prepare('DELETE FROM room_members WHERE room_id = ? AND player_id = ?').bind(r.id, me.id).run();
+/**
+ * Takes a player out of the room. In a game in progress their seat stays and the
+ * others pick for them; the game ends only when none of its players are left.
+ * The host role passes to the next player in the room.
+ */
+const removeMember = async (env: Env, r: RoomRow, playerId: string) => {
+  await env.DB.prepare('DELETE FROM room_members WHERE room_id = ? AND player_id = ?').bind(r.id, playerId).run();
   const left = await loadMembers(env, r.id);
   const now = Date.now();
+  if (r.status === 'playing' && r.game_id) {
+    const g = await loadGame(env, r.game_id);
+    const seats = g ? (JSON.parse(g.seats) as string[]) : [];
+    if (!left.some((m) => seats.includes(m.player_id))) await finishGame(env, r, r.game_id, 'ended');
+  }
   if (!left.length) await env.DB.prepare("UPDATE rooms SET status = 'closed', updated_at = ? WHERE id = ?").bind(now, r.id).run();
-  else if (r.host_id === me.id) await env.DB.prepare('UPDATE rooms SET host_id = ?, updated_at = ? WHERE id = ?').bind(left[0].player_id, now, r.id).run();
+  else if (r.host_id === playerId) await env.DB.prepare('UPDATE rooms SET host_id = ?, updated_at = ? WHERE id = ?').bind(left[0].player_id, now, r.id).run();
+};
+
+const leaveRoom = async (me: PlayerRow, env: Env, id: string) => {
+  await removeMember(env, await loadRoom(env, id), me.id);
   return json({ ok: true });
+};
+
+/** The host takes another player out of the room. */
+const removePlayer = async (req: Request, me: PlayerRow, env: Env, id: string) => {
+  const r = await loadRoom(env, id);
+  requireHost(r, me);
+  const target = String((await body(req)).playerId ?? '');
+  if (target === me.id) throw new HttpError(400, 'Use Leave room to leave yourself');
+  if (!(await loadMembers(env, r.id)).some((m) => m.player_id === target)) throw new HttpError(404, 'That player is not in the room');
+  await removeMember(env, r, target);
+  return memberView(env, await loadRoom(env, id), me);
 };
 
 /** The room this player was in most recently, so a reload can return to it. */
@@ -506,7 +534,7 @@ const route = async (req: Request, env: Env): Promise<Response> => {
   if (path === '/api/me/room' && method === 'GET') return currentRoom(me, env);
   if (path === '/api/rooms' && method === 'POST') return createRoom(req, me, env);
   if (path === '/api/rooms/join' && method === 'POST') return joinRoom(req, me, env);
-  const room = path.match(/^\/api\/rooms\/([0-9a-f]{16})(?:\/(settings|start|pick|end|leave))?$/);
+  const room = path.match(/^\/api\/rooms\/([0-9a-f]{16})(?:\/(settings|start|pick|end|leave|remove))?$/);
   if (room && !room[2] && method === 'GET') return memberView(env, await loadRoom(env, room[1]), me);
   if (room && room[2] && method === 'POST') {
     const id = room[1];
@@ -521,6 +549,8 @@ const route = async (req: Request, env: Env): Promise<Response> => {
         return endGame(me, env, id);
       case 'leave':
         return leaveRoom(me, env, id);
+      case 'remove':
+        return removePlayer(req, me, env, id);
     }
   }
   throw new HttpError(404, 'Not found');

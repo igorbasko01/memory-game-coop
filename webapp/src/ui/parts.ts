@@ -42,6 +42,8 @@ export const roundLine = (room: RoomView, game: GameView, you: string | null = n
     const left = game.picksPerPlayer - me.picked;
     return game.picksPerPlayer > 1 ? `Pick ${left} more card${left === 1 ? '' : 's'}` : 'Pick a card';
   }
+  const gone = waiting.filter((m) => m.left && m.id !== you).map((m) => m.nickname);
+  if (others.length && gone.length === others.length) return `${names(gone)} left · someone picks for them`;
   if (others.length) return `Waiting for ${names(others)}`;
   return 'Flipping…';
 };

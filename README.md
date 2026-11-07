@@ -10,7 +10,7 @@ A **cooperative online memory game** for 1–4 players, with an optional TV as t
 - Then all the picked cards **flip together**. If they all match, the set is closed and stays face up; otherwise everyone sees the cards for a moment, then they turn back over.
 - The team wins together when every set is closed. The result shows the time, the rounds and the misses.
 - **TV mode:** open the game on a TV (or laptop), choose *Use this screen as a TV* and enter the room code (or open `/?tv=ABCD`). In the lobby it shows a big QR code and the code for joining, and the players as they arrive; during the game it shows the board with everyone's picks, who is still picking, stats and a flash for every set and miss. Phones show *📺 TV on* while it's connected. The TV needs no account and never sees a card before it's flipped.
-- If a player drops out, once a round has been open for 20 seconds anyone who has picked can pick for them. The host can end a game, change the grid and start the next one (*Play again*); new players can join between games.
+- Anyone can leave, even mid-game: their seat stays and the others pick for them straight away (they can rejoin with the room code). The host can also remove a player from the menu, with the same effect. If a player just goes quiet, anyone who has picked can pick for them once the round has been open for 20 seconds. The host can end a game, change the grid and start the next one (*Play again*); new players can join between games.
 
 ## Architecture
 

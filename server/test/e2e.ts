@@ -96,7 +96,26 @@ const main = async () => {
   assert(room.waiting.length === 1 && room.nextSetSize === 4, 'the next game will have sets of four');
   room = await call(`/api/rooms/${id}/start`, a.token, {});
   assert(room.game?.setSize === 4 && room.members.length === 4, 'play again with four players');
-  assert((await request(`/api/rooms/${id}/leave`, b.token, {})).status === 409, 'players stay while their game is going');
+
+  // Leaving mid-game: the seat stays, and the others pick for it straight away.
+  await call(`/api/rooms/${id}/leave`, c.token, {});
+  room = await call(`/api/rooms/${id}`, a.token);
+  assert(room.status === 'playing' && room.members[2].left, 'a player can leave a game in progress; their seat stays');
+  const round = room.game!.round;
+  await pickFor(a.token, round, 0);
+  await pickFor(b.token, round, 1);
+  room = await pickFor(d.token, round, 2);
+  assert(room.game!.round === round, 'the round waits for the seat that left');
+  room = await pickFor(a.token, round, 3);
+  assert(room.game!.round === round + 1, 'someone who has picked can pick for a player who left, without waiting');
+  room = await call('/api/rooms/join', c.token, { code: created.code });
+  assert(room.status === 'playing' && !room.members[2].left, 'a player who left can rejoin the game in progress');
+
+  // The host can remove a player; only the host.
+  assert((await request(`/api/rooms/${id}/remove`, b.token, { playerId: d.player.id })).status === 403, 'only the host removes players');
+  room = await call(`/api/rooms/${id}/remove`, a.token, { playerId: d.player.id });
+  assert(room.members[3].left && room.status === 'playing', 'the host removes a player; their seat stays in the game');
+  assert((await request(`/api/rooms/${id}`, d.token)).status === 403, 'a removed player is out of the room');
   room = await call(`/api/rooms/${id}/end`, a.token, {});
   assert(room.status === 'finished' && room.game?.status === 'ended', 'the host can end the game');
   await call(`/api/rooms/${id}/leave`, a.token, {});
