@@ -14,6 +14,8 @@ const flexGap = () => {
   return ok;
 };
 if (!flexGap()) document.documentElement.classList.add('no-flex-gap');
+// CSS Grid arrived in Chromium 57; Samsung's 2018 TVs run 56. Those get flexbox layouts instead.
+if (!(window.CSS && CSS.supports && CSS.supports('display', 'grid'))) document.documentElement.classList.add('no-grid');
 
 const root = document.getElementById('app')!;
 const params = new URLSearchParams(location.search);

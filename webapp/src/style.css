@@ -839,10 +839,10 @@ input:focus {
   transform: scale(0.95);
 }
 
+/* Closed sets belong to the whole team: tinted with the number's own colour. */
 .card.is-closed .card-face {
-  border-color: var(--seat-color);
   background: var(--card-face);
-  background: color-mix(in srgb, var(--seat-color) 22%, var(--card-face));
+  background: color-mix(in srgb, var(--value-color) 18%, var(--card-face));
 }
 
 /* Opacity goes on the face: on the 3D wrapper it would flatten the flip and show the back. */
@@ -1379,4 +1379,101 @@ input:focus {
 
 .no-flex-gap #tv-form > * + * {
   margin-left: 2vh;
+}
+
+/* Browsers without CSS Grid (Chromium < 57, e.g. Samsung's 2018 TVs): main.ts adds .no-grid,
+   and the layouts that need it switch to flexbox. Elements that only stack become blocks. */
+.no-grid .board {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 0;
+}
+
+.no-grid .card {
+  margin: calc(var(--gap) / 2);
+}
+
+.no-grid .tv-game {
+  display: flex;
+}
+
+.no-grid .tv-board-wrap {
+  flex: 1;
+}
+
+.no-grid .tv-side {
+  flex: none;
+  width: 30vw;
+  min-width: 320px;
+}
+
+.no-grid .tv-lobby {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+}
+
+.no-grid .tv-lobby .tv-title {
+  width: 100%;
+  margin-bottom: 4vh;
+}
+
+.no-grid .tv-join {
+  width: 42vw;
+  margin-right: 5vw;
+}
+
+.no-grid .tv-players {
+  flex: 1;
+}
+
+/* Centred contents: grid + place-items becomes flex. */
+.no-grid .logo span,
+.no-grid .menu summary,
+.no-grid .avatar,
+.no-grid .set-size,
+.no-grid .slot,
+.no-grid .card-back,
+.no-grid .card-face,
+.no-grid .card.is-picked .pick-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.no-grid .members > li + li {
+  margin-top: 8px;
+}
+
+.no-grid .members.big > li + li {
+  margin-top: 1.4vh;
+}
+
+.no-grid .turn-card > * + * {
+  margin-top: 1.4vh;
+}
+
+.no-grid .tv-side .tv-join.compact {
+  width: auto;
+  margin-right: 0;
+}
+
+.no-grid .presets {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.no-grid .preset {
+  width: calc(33.33% - 6px);
+  margin: 0 8px 8px 0;
+}
+
+.no-grid .preset:nth-child(3n) {
+  margin-right: 0;
+}
+
+.no-grid .field > * + *,
+.no-grid .game-foot > * + * {
+  margin-top: 8px;
 }
